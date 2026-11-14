@@ -18,6 +18,6 @@ Open the Supabase SQL Editor, create a new query, paste the full contents of `da
 
 Serve this folder over HTTP. Opening `index.html` directly as a `file://` URL may block cloud requests in some browsers.
 
-## Not connected yet
+## Connections
 
-Photo storage, multilingual interface, webpage extraction, screenshot OCR, recipe version history, and GitHub deployment are the next milestones.
+Photo storage, multilingual interface, webpage extraction, screenshot OCR, recipe version history, and GitHub deployment.
