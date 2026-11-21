@@ -24,7 +24,58 @@ function smartOcrTitle(result){let u=(result?.data?.lines||[]).map(l=>({text:cle
 async function processRecipeImage(file){if(!file)return;$('ocrProgress').textContent='Preparing the image…';try{let prepared=await prepareOcrImage(file),read=async input=>Tesseract.recognize(input,'eng+spa+ces',{logger:m=>{if(m.progress)$('ocrProgress').textContent=`Reading image… ${Math.round(m.progress*100)}%`},preserve_interword_spaces:'1'}),first=await read(prepared),choices=[first];if((first.data.confidence||0)<52||first.data.text.trim().length<80){$('ocrProgress').textContent='Trying a second reading for better accuracy…';choices.push(await read(file))}let candidates=choices.map(x=>({parsed:parseRecipeText(x.data.text),confidence:x.data.confidence||0,result:x})),best=candidates.sort((a,b)=>recipeReadScore(b.parsed,b.confidence)-recipeReadScore(a.parsed,a.confidence))[0],heading=smartOcrTitle(best.result);if(heading)best.parsed.title=heading;let data=repairOcrRecipe(await translateImported(best.parsed)),known=[data.title,...(data.ingredients||[]),...(data.steps||[])].join(' ').toLowerCase();if(/(beef|hověz)/.test(known)&&/tortill/.test(known)&&/(cheddar|čedar|cedar|cheese|sýr)/.test(known)){data.title='Baked Tortillas with Beef and Cheese';data.meal='Lunch';data.meals=['Lunch','Dinner'];data.ingredients=['1 tbsp oil','6 mini tortillas','450 g minced beef','1 green bell pepper','1 onion','1 garlic clove','100 g grated cheddar','Chives and crème fraîche, optional, for serving'];data.steps=['Sauté the onion and garlic in the oil. Add the minced beef and cook until browned.','Spread the beef mixture over the tortillas, then add the green pepper and grated cheddar.','Bake at 200 °C for about 8 minutes, until the cheese has melted.','Serve with chives and crème fraîche, if desired.'];data.tags=[...(data.tags||[]),'lunch','dinner','tortillas','beef','cheese','Mexican']}data.title=generatedRecipeTitle(data);$('ocrProgress').textContent='';openImported(data)}catch(err){$('ocrProgress').textContent=`Could not read this image: ${err?.message||'unknown error'}. Try pasting the recipe text instead.`}}
 $('imageFile').onchange=e=>processRecipeImage(e.target.files[0]);document.addEventListener('paste',e=>{let image=[...(e.clipboardData?.items||[])].find(x=>x.type.startsWith('image/')),imagePanel=document.querySelector('.panel[data-panel="image"]');if(!image)return;if($('editor').open){e.preventDefault();setRecipePhoto(image.getAsFile());return}if($('importer').open&&imagePanel.classList.contains('active')){e.preventDefault();$('ocrProgress').textContent='Image pasted. Preparing to read it…';processRecipeImage(image.getAsFile())}});
 function cleanReaderLine(value){return String(value||'').replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/[*_#]+/g,'').replace(/\s+/g,' ').trim()}function parseMonsieurReader(text,source){let lines=text.split(/\r?\n/).map(cleanReaderLine).filter(Boolean),title=(lines.find(x=>/^Title:\s*/i.test(x))||'').replace(/^Title:\s*/i,'').trim()||'Imported recipe',total=(lines.find(x=>/^Tiempo total\b/i.test(x))||'').replace(/^Tiempo total\s*/i,'').trim(),head=lines.map(x=>x.toLowerCase()).lastIndexOf('ingredientes generales'),ingredients=[];if(head>=0){let end=lines.findIndex((x,i)=>i>head&&/^(añadir a la lista|valores nutricionales|reseñas)/i.test(x)),block=lines.slice(head+1,end>head?end:undefined).filter(x=>!/^[-–—]+$/.test(x));for(let i=0;i<block.length-1;i+=2)if(block[i]&&block[i+1])ingredients.push(block[i+1]+' '+block[i])}let stepHead=lines.map(x=>x.toLowerCase()).lastIndexOf('pasos'),steps=[];if(stepHead>=0){let end=lines.findIndex((x,i)=>i>stepHead&&/^(valores nutricionales|ingredientes)$/i.test(x)),block=lines.slice(stepHead+1,end>stepHead?end:undefined),current=[];for(let line of block){if(/^\d+$/.test(line)){if(current.length)steps.push(current.join('. '));current=[];continue}if(/^(báscula|cocción personalizada|derecha|izquierda|0℃|\d+(?:g|min|s))$/i.test(line))continue;current.push(line)}if(current.length)steps.push(current.join('. '))}return{title,meal:'Dinner',time:total,ingredients,steps,tags:[],emoji:'🥘',source,inLanguage:'es'}}
-$('importLink').onclick=async()=>{let url=$('sourceUrl').value.trim();if(!url)return alert('Please paste a link first.');$('importLink').disabled=true;$('importLink').textContent='Checking link…';try{if(/(^|\.)monsieur-cuisine\.com$/i.test(new URL(url).hostname)){let response=await fetch('https://r.jina.ai/'+url);if(response.ok){let parsed=parseMonsieurReader(await response.text(),url);if(parsed.ingredients.length){openImported(await translateImported(parsed));return}}}let {data,error}=await db.functions.invoke('extract-recipe',{body:{url}});if(error||data?.error)throw new Error(data?.error||error.message);if(data.kind==='text'){openImported(parseRecipeText(data.text,url));return}let recipe=data.recipe,rawSteps=recipe.recipeInstructions||[],steps=Array.isArray(rawSteps)?rawSteps.flatMap(x=>x?.itemListElement||[x]).map(x=>typeof x==='string'?x:(x?.text||'')).filter(Boolean):[rawSteps].filter(Boolean),category=Array.isArray(recipe.recipeCategory)?recipe.recipeCategory[0]:recipe.recipeCategory;openImported({title:recipe.name||'Imported recipe',meal:category||'Dinner',time:recipe.totalTime||recipe.cookTime||'',ingredients:recipe.recipeIngredient||[],steps,tags:Array.isArray(recipe.keywords)?recipe.keywords:String(recipe.keywords||'').split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:url})}catch(err){alert(`Could not extract this link: ${err.message}. Please use Text or Screenshot instead.`)}finally{$('importLink').disabled=false;$('importLink').textContent='Extract recipe'}};
+function parseShapedRecipe(html, source) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const metadata = template.content.querySelector('meta[name="nullstack"]')?.content;
+  if (!metadata) throw new Error('Shaped did not provide recipe data');
+
+  const {instances} = JSON.parse(decodeURIComponent(metadata));
+  const videoId = new URL(source).pathname.split('/')[2];
+  const recipe = Object.values(instances || {}).map(instance => instance?.video)
+    .find(video => video?._id === videoId && video.isRecipe && Array.isArray(video.ingredients) && Array.isArray(video.steps));
+  if (!recipe) throw new Error('Shaped did not provide recipe data');
+
+  const ingredients = [];
+  let previousGroup = '';
+  for (const item of recipe.ingredients) {
+    if (!item?.name?.trim()) continue;
+    const group = item.ingredientListName?.trim() || 'Ingredients';
+    if (group !== previousGroup && (ingredients.length || group !== 'Ingredients')) {
+      ingredients.push(`${group}:`);
+    }
+    previousGroup = group;
+    const unit = item.unitOfMeasure === 'unit' ? '' : item.unitOfMeasure;
+    ingredients.push([item.quantity || '', item.quantityFraction, unit, item.name].filter(Boolean).join(' '));
+  }
+  const steps = recipe.steps.map(step => step?.description?.trim()).filter(Boolean);
+  if (!ingredients.length || !steps.length) throw new Error('Shaped returned an incomplete recipe');
+
+  const tags = [...template.content.querySelectorAll('a[href*="type=recipe"][href*="tags="]')]
+    .map(link => new URL(link.getAttribute('href'), source).searchParams.get('tags'))
+    .filter(Boolean);
+  const meals = ['Breakfast', 'Lunch', 'Dinner', 'Dessert', 'Snack'].filter(meal => tags.includes(meal));
+
+  return {
+    title: recipe.name || 'Imported recipe',
+    meals: meals.length ? meals : ['Dinner'],
+    time: recipe.time ? `${recipe.time} min` : '',
+    ingredients,
+    steps,
+    tags: [...new Set(tags)],
+    emoji: '🥘',
+    source
+  };
+}
+
+async function importShapedRecipe(url) {
+  const source = 'https://studio.joinshaped.com' + url.pathname;
+  const response = await fetch('https://r.jina.ai/' + source, {headers: {'X-Respond-With': 'html'}});
+  if (!response.ok) throw new Error('Could not load the Shaped recipe page');
+  return parseShapedRecipe(await response.text(), source);
+}
+
+$('importLink').onclick=async()=>{let url=$('sourceUrl').value.trim();if(!url)return alert('Please paste a link first.');$('importLink').disabled=true;$('importLink').textContent='Checking link…';try{let page=new URL(url);if(page.hostname==='studio.joinshaped.com'&&/^\/video\/[^/]+/.test(page.pathname)){openImported(await importShapedRecipe(page));return}if(/(^|\.)monsieur-cuisine\.com$/i.test(page.hostname)){let response=await fetch('https://r.jina.ai/'+url);if(response.ok){let parsed=parseMonsieurReader(await response.text(),url);if(parsed.ingredients.length){openImported(await translateImported(parsed));return}}}let {data,error}=await db.functions.invoke('extract-recipe',{body:{url}});if(error||data?.error)throw new Error(data?.error||error.message);if(data.kind==='text'){openImported(parseRecipeText(data.text,url));return}let recipe=data.recipe,rawSteps=recipe.recipeInstructions||[],steps=Array.isArray(rawSteps)?rawSteps.flatMap(x=>x?.itemListElement||[x]).map(x=>typeof x==='string'?x:(x?.text||'')).filter(Boolean):[rawSteps].filter(Boolean),category=Array.isArray(recipe.recipeCategory)?recipe.recipeCategory[0]:recipe.recipeCategory;openImported({title:recipe.name||'Imported recipe',meal:category||'Dinner',time:recipe.totalTime||recipe.cookTime||'',ingredients:recipe.recipeIngredient||[],steps,tags:Array.isArray(recipe.keywords)?recipe.keywords:String(recipe.keywords||'').split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:url})}catch(err){alert(`Could not extract this link: ${err.message}. Please use Text or Screenshot instead.`)}finally{$('importLink').disabled=false;$('importLink').textContent='Extract recipe'}};
 function openRecipe(id){let r=recipes.find(x=>x.id===id);if(!canEdit&&r){alert(`${r.data.title}\n\nIngredients:\n${(r.data.ingredients||[]).join('\n')}\n\nMethod:\n${(r.data.steps||[]).join('\n')}${r.data.source?'\n\nSource: '+r.data.source:''}`);return}editing=r||null;showPhoto(r?.data.photo,r?.data.photoX,r?.data.photoY);$('title').value=r?.data.title||'';$('source').value=r?.data.source||'';setMealTypes(r?.data||{});$('time').value=formatTime(r?.data.time);$('ingredients').value=(r?.data.ingredients||[]).join('\n');$('steps').value=(r?.data.steps||[]).join('\n');$('tags').value=(r?.data.tags||[]).join(', ');$('remove').hidden=!r;$('editor').showModal();growTextareas()}
 $('photoFile').onchange=e=>setRecipePhoto(e.target.files[0]);$('removePhoto').onclick=()=>showPhoto('');{let preview=$('photoPreview'),drag=null;preview.onpointerdown=e=>{if(!currentPhoto)return;drag={x:e.clientX,y:e.clientY,photoX:currentPhotoX,photoY:currentPhotoY};preview.setPointerCapture(e.pointerId);preview.focus();e.preventDefault()};preview.onpointermove=e=>{if(!drag)return;let box=preview.getBoundingClientRect();currentPhotoX=photoPosition(drag.photoX+(e.clientX-drag.x)/box.width*100);currentPhotoY=photoPosition(drag.photoY+(e.clientY-drag.y)/box.height*100);updatePhotoPosition()};preview.onpointerup=preview.onpointercancel=e=>{drag=null;if(preview.hasPointerCapture(e.pointerId))preview.releasePointerCapture(e.pointerId)};preview.onkeydown=e=>{let step=e.shiftKey?5:1;if(e.key==='ArrowLeft')currentPhotoX-=step;else if(e.key==='ArrowRight')currentPhotoX+=step;else if(e.key==='ArrowUp')currentPhotoY-=step;else if(e.key==='ArrowDown')currentPhotoY+=step;else return;e.preventDefault();updatePhotoPosition()}}
 document.querySelectorAll('#editor textarea').forEach(x=>x.addEventListener('input',growTextareas));
