@@ -35,6 +35,15 @@ function draw() {
     };
   });
 }
+function recipeMethodLines(steps = []) {
+  return steps.map(step => {
+    const line = String(step ?? '').trim();
+    return line
+      .replace(/^(?:#{1,6}\s+)?step\s+\d+(?:\s*[.):–—-]\s*|\s+|$)/i, '')
+      .replace(/^\d+[.)](?:\s+|$)/, '')
+      .trim();
+  }).filter(Boolean);
+}
 function showRecipeDetail(recipe) {
   const {data} = recipe;
   const editButton = $('editRecipe');
@@ -61,7 +70,7 @@ function showRecipeDetail(recipe) {
   source.hidden = !href;
   if (href) source.href = href;
   else source.removeAttribute('href');
-  for (const [id, lines] of [['recipeDetailIngredients', data.ingredients], ['recipeDetailSteps', data.steps]]) {
+  for (const [id, lines] of [['recipeDetailIngredients', data.ingredients], ['recipeDetailSteps', recipeMethodLines(data.steps || [])]]) {
     $(id).replaceChildren(...(lines || []).map(line => {
       const item = document.createElement('li');
       item.textContent = line;
