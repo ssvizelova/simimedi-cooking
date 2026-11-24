@@ -1,9 +1,70 @@
 const cfg=window.SIMIMEDI_CONFIG, db=supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);let recipes=[],editing=null,currentPhoto='',currentPhotoX=50,currentPhotoY=50,activeMeal='All';const token=new URLSearchParams(location.search).get('edit')||'';const canEdit=!!token;
 const $=id=>document.getElementById(id);$('add').hidden=!canEdit;function safeSource(value){try{let u=new URL(value);return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return''}}function formatTime(value){let text=String(value||'').trim(),m=text.match(/^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);if(!m)return text;let days=Number(m[1]||0),hours=Number(m[2]||0),minutes=Number(m[3]||0),seconds=Number(m[4]||0),parts=[];if(days)parts.push(`${days} d`);if(hours)parts.push(`${hours} h`);if(minutes)parts.push(`${minutes} min`);if(!parts.length&&seconds)parts.push(`${seconds} sec`);return parts.join(' ')||text}
-function safePhoto(value){return /^data:image\/(?:jpeg|png|webp);base64,/i.test(String(value||''))?value:''}function photoPosition(value){let n=Number(value);return Number.isFinite(n)?Math.max(0,Math.min(100,n)):50}function mealTypes(data){let values=Array.isArray(data?.meals)?data.meals:[data?.meal];return [...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))]}function selectedMealTypes(){return [...document.querySelectorAll('#mealChoices input:checked')].map(x=>x.value)}function setMealTypes(data){let values=mealTypes(data);if(!values.length)values=['Dinner'];document.querySelectorAll('#mealChoices input').forEach(x=>x.checked=values.includes(x.value))}function draw(){let q=$('search').value.toLowerCase();let rows=recipes.filter(r=>JSON.stringify(r.data).toLowerCase().includes(q)&&(activeMeal==='All'||mealTypes(r.data).includes(activeMeal)));$('grid').innerHTML=rows.map(r=>{let source=safeSource(r.data.source),time=formatTime(r.data.time),photo=safePhoto(r.data.photo),position=`${photoPosition(r.data.photoX)}% ${photoPosition(r.data.photoY)}%`,meals=mealTypes(r.data);return `<article class="card" data-id="${r.id}">${photo?`<img class="card-photo" src="${photo}" alt="" style="object-position:${position}">`:`<div class="emoji">${r.data.emoji||'🥘'}</div>`}<h3>${r.data.title||'Untitled recipe'}</h3><p class="tags">${(r.data.tags||[]).join(' · ')}</p><span class="muted">${meals.join(' · ')} ${time?'· '+time:''}</span>${source?`<a class="source" href="${source}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗ View original recipe</a>`:''}</article>`}).join('')||'<p class="muted">No recipes found.</p>';document.querySelectorAll('.card').forEach(x=>x.onclick=()=>openRecipe(x.dataset.id))}
-async function load(){let {data:libs}=await db.from('libraries').select('id').eq('slug',cfg.librarySlug);if(!libs?.length){$('status').textContent='The database is connected. Your cookbook needs its one-time setup.';if(canEdit)$('setup').showModal();return}let {data,error}=await db.from('recipes').select('*').eq('library_id',libs[0].id).order('updated_at',{ascending:false});if(error){$('status').textContent='Could not load recipes: '+error.message;return}recipes=data||[];$('status').textContent=canEdit?'Editing mode · keep this link private':'Viewing mode';draw()}
+function safePhoto(value){return /^data:image\/(?:jpeg|png|webp);base64,/i.test(String(value||''))?value:''}function photoPosition(value){let n=Number(value);return Number.isFinite(n)?Math.max(0,Math.min(100,n)):50}function mealTypes(data){let values=Array.isArray(data?.meals)?data.meals:[data?.meal];return [...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))]}function selectedMealTypes(){return [...document.querySelectorAll('#mealChoices input:checked')].map(x=>x.value)}function setMealTypes(data){let values=mealTypes(data);if(!values.length)values=['Dinner'];document.querySelectorAll('#mealChoices input').forEach(x=>x.checked=values.includes(x.value))}function escapeText(value) {
+  const span = document.createElement('span');
+  span.textContent = value;
+  return span.innerHTML.replace(/"/g, '&quot;');
+}
+function recipeMeta(data) {
+  return [...mealTypes(data), formatTime(data.time)].filter(Boolean).join(' · ');
+}
+function draw() {
+  const query = $('search').value.toLowerCase();
+  const rows = recipes.filter(recipe => JSON.stringify(recipe.data).toLowerCase().includes(query)
+    && (activeMeal === 'All' || mealTypes(recipe.data).includes(activeMeal)));
+  $('grid').innerHTML = rows.map(({id, data}) => {
+    const source = safeSource(data.source);
+    const photo = safePhoto(data.photo);
+    const position = `${photoPosition(data.photoX)}% ${photoPosition(data.photoY)}%`;
+    const media = photo
+      ? `<img class="card-photo" src="${photo}" alt="" loading="lazy" style="object-position:${position}">`
+      : `<div class="emoji" aria-hidden="true">${escapeText(data.emoji || '🥘')}</div>`;
+    const tags = (data.tags || []).join(' · ');
+    return `<article class="card" data-id="${escapeText(id)}">${media}
+      <div class="card-copy">
+        <p class="eyebrow card-meta">${escapeText(recipeMeta(data))}</p>
+        <h3><button class="card-title" type="button">${escapeText(data.title || 'Untitled recipe')}</button></h3>
+        ${tags ? `<p class="tags">${escapeText(tags)}</p>` : ''}
+        ${source ? `<a class="source" href="${escapeText(source)}" target="_blank" rel="noopener">View original</a>` : ''}
+      </div>
+    </article>`;
+  }).join('') || '<p class="muted">No recipes found.</p>';
+  document.querySelectorAll('.card').forEach(card => {
+    card.onclick = event => {
+      if (!event.target.closest('a')) openRecipe(card.dataset.id);
+    };
+  });
+}
+function showRecipeDetail(data) {
+  $('recipeDetailTitle').textContent = data.title || 'Untitled recipe';
+  $('recipeDetailMeta').textContent = recipeMeta(data);
+  const photo = $('recipeDetailPhoto');
+  const image = safePhoto(data.photo);
+  photo.hidden = !image;
+  if (image) {
+    photo.src = image;
+    photo.style.objectPosition = `${photoPosition(data.photoX)}% ${photoPosition(data.photoY)}%`;
+  } else {
+    photo.removeAttribute('src');
+  }
+  const source = $('recipeDetailSource');
+  const href = safeSource(data.source);
+  source.hidden = !href;
+  if (href) source.href = href;
+  else source.removeAttribute('href');
+  for (const [id, lines] of [['recipeDetailIngredients', data.ingredients], ['recipeDetailSteps', data.steps]]) {
+    $(id).replaceChildren(...(lines || []).map(line => {
+      const item = document.createElement('li');
+      item.textContent = line;
+      if (id === 'recipeDetailIngredients' && String(line).endsWith(':')) item.className = 'ingredient-group';
+      return item;
+    }));
+  }
+  $('recipeDetail').showModal();
+}
+async function load(){let {data:libs}=await db.from('libraries').select('id').eq('slug',cfg.librarySlug);if(!libs?.length){$('status').textContent='The database is connected. Your cookbook needs its one-time setup.';if(canEdit)$('setup').showModal();return}let {data,error}=await db.from('recipes').select('*').eq('library_id',libs[0].id).order('updated_at',{ascending:false});if(error){$('status').textContent='Could not load recipes: '+error.message;return}recipes=data||[];$('status').hidden=!canEdit;$('status').textContent='Editing mode · keep this link private';draw()}
 $('create').onclick=async()=>{let secret=crypto.randomUUID()+crypto.randomUUID();let {error}=await db.rpc('create_library',{p_name:'SimiMedi Cooking',p_slug:cfg.librarySlug,p_edit_token:secret});if(error){alert(error.message);return}let url=location.origin+location.pathname+'?edit='+encodeURIComponent(secret);await navigator.clipboard.writeText(url);alert('Your secret editing link was copied. Save it somewhere private.');location.href=url};
-$('search').oninput=draw;$('mealFilters').onclick=e=>{let button=e.target.closest('button[data-meal]');if(!button)return;activeMeal=button.dataset.meal;document.querySelectorAll('#mealFilters button').forEach(x=>x.classList.toggle('active',x===button));draw()};$('add').onclick=()=>{$('importer').showModal()};
+$('search').oninput=draw;$('mealFilters').onclick=e=>{let button=e.target.closest('button[data-meal]');if(!button)return;activeMeal=button.dataset.meal;document.querySelectorAll('#mealFilters button').forEach(x=>{x.classList.toggle('active',x===button);x.setAttribute('aria-pressed',String(x===button))});draw()};$('add').onclick=()=>{$('importer').showModal()};
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.dataset.panel===b.dataset.mode))});
 function automaticTags(data){let text=[data.title,...(data.ingredients||[])].join(' ').toLowerCase(),tags=[...(data.tags||[])],rules=[['peanut',/peanut|arašíd|cacahuete/],['noodles',/noodle|nudle|fideo/],['rice',/\brice\b|rýže|arroz/],['pasta',/pasta|spaghetti|penne|těstovin/],['chicken',/chicken|kuřec|pollo/],['beef',/\bbeef\b|hověz|ternera/],['pork',/\bpork\b|vepř|cerdo/],['shrimp',/shrimp|prawn|krevety|gamba|camarón/],['fish',/\bfish\b|salmon|tuna|ryb|losos|pescado|salmón|atún/],['tofu',/\btofu\b/],['chickpeas',/chickpea|cizrn|garbanzo/],['eggs',/\begg|vejce|huevo/],['bell pepper',/bell pepper|paprik|pimiento/],['bean sprouts',/bean sprout|fazolové klíčky|brotes de soja/],['lentils',/lentil|čočk|lenteja/],['beans',/\bbeans?\b|fazole|frijol|alubia/],['potato',/potato|brambor|patata/],['tomato',/tomato|rajč|tomate/],['mushroom',/mushroom|houb|žampion|seta|champiñ/],['cheese',/cheese|sýr|queso/],['chocolate',/chocolate|čokolád/],['fruit',/apple|banana|berry|berries|jablk|banán|ovoce|manzana|fruta/],['soup',/\bsoup\b|polév|sopa/],['salad',/\bsalad\b|salát|ensalada/],['Thai',/pad thai|thai|thajsk/],['Mexican',/taco|burrito|mexican|mexick/],['Italian',/risotto|lasagn|italian|italsk/]];for(let [tag,re] of rules)if(re.test(text))tags.push(tag);if(/soy sauce|rice noodle|sesame|ginger|tofu|pad thai|curry|sriracha|sojov|zázvor|jengibre/.test(text))tags.push('Asian');let healthySignals=[/brown rice|whole.?grain|quinoa|oves|avena/,/bell pepper|bean sprout|broccoli|spinach|kale|paprik|špenát|espinaca/,/lentil|chickpea|beans|tofu|čočk|cizrn|lenteja|garbanzo/,/salmon|tuna|shrimp|chicken|losos|tuňák|pollo/].filter(re=>re.test(text)).length;if(healthySignals>=2&&!/deep.?fr|frit|cake|cookie|brownie|dort|galleta/.test(text))tags.push('healthy');for(const meal of mealTypes(data))tags.push(meal.toLowerCase());return [...new Set(tags.map(x=>String(x).trim()).filter(Boolean))].slice(0,20)}
 function cleanCapturedText(raw){let area=document.createElement('textarea');area.innerHTML=raw;return area.value.replace(/[�□▯◻◼■]+/g,'\n').replace(/([a-zá-ž)])(?=\d+\s*(?:g|kg|ml|l|tbsp|tsp|lžíce|lžičk))/gi,'$1\n').replace(/(^|\n)[o0](?=\d)/gi,'$1').replace(/(^|\n)[o0]\s*(?=\()/gi,'$1').replace(/[\uE000-\uF8FF\uFE0F]/g,'').replace(/\p{Extended_Pictographic}/gu,'').split(/\r?\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(x=>x&&!/^(posts?|reels?|see translation|less|více|méně|likes?|comments?|sdílení|cook mode|[o0w|]{1,4})$/i.test(x)&&!/^\d{1,2}:\d{2}$/.test(x)&&!/^\d+\s+(september|october|listopad|říjen|září)/i.test(x)&&!(/^[♡♥]?\s*\d+(?:\s+\d+)*$/.test(x))).map((x,i)=>i<5?x.replace(/^[a-z0-9._]{3,}\s+(?=[A-ZÁ-Ž])/,''):x).join('\n')}
@@ -76,7 +137,7 @@ async function importShapedRecipe(url) {
 }
 
 $('importLink').onclick=async()=>{let url=$('sourceUrl').value.trim();if(!url)return alert('Please paste a link first.');$('importLink').disabled=true;$('importLink').textContent='Checking link…';try{let page=new URL(url);if(page.hostname==='studio.joinshaped.com'&&/^\/video\/[^/]+/.test(page.pathname)){openImported(await importShapedRecipe(page));return}if(/(^|\.)monsieur-cuisine\.com$/i.test(page.hostname)){let response=await fetch('https://r.jina.ai/'+url);if(response.ok){let parsed=parseMonsieurReader(await response.text(),url);if(parsed.ingredients.length){openImported(await translateImported(parsed));return}}}let {data,error}=await db.functions.invoke('extract-recipe',{body:{url}});if(error||data?.error)throw new Error(data?.error||error.message);if(data.kind==='text'){openImported(parseRecipeText(data.text,url));return}let recipe=data.recipe,rawSteps=recipe.recipeInstructions||[],steps=Array.isArray(rawSteps)?rawSteps.flatMap(x=>x?.itemListElement||[x]).map(x=>typeof x==='string'?x:(x?.text||'')).filter(Boolean):[rawSteps].filter(Boolean),category=Array.isArray(recipe.recipeCategory)?recipe.recipeCategory[0]:recipe.recipeCategory;openImported({title:recipe.name||'Imported recipe',meal:category||'Dinner',time:recipe.totalTime||recipe.cookTime||'',ingredients:recipe.recipeIngredient||[],steps,tags:Array.isArray(recipe.keywords)?recipe.keywords:String(recipe.keywords||'').split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:url})}catch(err){alert(`Could not extract this link: ${err.message}. Please use Text or Screenshot instead.`)}finally{$('importLink').disabled=false;$('importLink').textContent='Extract recipe'}};
-function openRecipe(id){let r=recipes.find(x=>x.id===id);if(!canEdit&&r){alert(`${r.data.title}\n\nIngredients:\n${(r.data.ingredients||[]).join('\n')}\n\nMethod:\n${(r.data.steps||[]).join('\n')}${r.data.source?'\n\nSource: '+r.data.source:''}`);return}editing=r||null;showPhoto(r?.data.photo,r?.data.photoX,r?.data.photoY);$('title').value=r?.data.title||'';$('source').value=r?.data.source||'';setMealTypes(r?.data||{});$('time').value=formatTime(r?.data.time);$('ingredients').value=(r?.data.ingredients||[]).join('\n');$('steps').value=(r?.data.steps||[]).join('\n');$('tags').value=(r?.data.tags||[]).join(', ');$('remove').hidden=!r;$('editor').showModal();growTextareas()}
+function openRecipe(id){let r=recipes.find(x=>x.id===id);if(!canEdit){if(r)showRecipeDetail(r.data);return}editing=r||null;showPhoto(r?.data.photo,r?.data.photoX,r?.data.photoY);$('title').value=r?.data.title||'';$('source').value=r?.data.source||'';setMealTypes(r?.data||{});$('time').value=formatTime(r?.data.time);$('ingredients').value=(r?.data.ingredients||[]).join('\n');$('steps').value=(r?.data.steps||[]).join('\n');$('tags').value=(r?.data.tags||[]).join(', ');$('remove').hidden=!r;$('editor').showModal();growTextareas()}
 $('photoFile').onchange=e=>setRecipePhoto(e.target.files[0]);$('removePhoto').onclick=()=>showPhoto('');{let preview=$('photoPreview'),drag=null;preview.onpointerdown=e=>{if(!currentPhoto)return;drag={x:e.clientX,y:e.clientY,photoX:currentPhotoX,photoY:currentPhotoY};preview.setPointerCapture(e.pointerId);preview.focus();e.preventDefault()};preview.onpointermove=e=>{if(!drag)return;let box=preview.getBoundingClientRect();currentPhotoX=photoPosition(drag.photoX+(e.clientX-drag.x)/box.width*100);currentPhotoY=photoPosition(drag.photoY+(e.clientY-drag.y)/box.height*100);updatePhotoPosition()};preview.onpointerup=preview.onpointercancel=e=>{drag=null;if(preview.hasPointerCapture(e.pointerId))preview.releasePointerCapture(e.pointerId)};preview.onkeydown=e=>{let step=e.shiftKey?5:1;if(e.key==='ArrowLeft')currentPhotoX-=step;else if(e.key==='ArrowRight')currentPhotoX+=step;else if(e.key==='ArrowUp')currentPhotoY-=step;else if(e.key==='ArrowDown')currentPhotoY+=step;else return;e.preventDefault();updatePhotoPosition()}}
 document.querySelectorAll('#editor textarea').forEach(x=>x.addEventListener('input',growTextareas));
 $('save').onclick=async()=>{let meals=selectedMealTypes();if(!meals.length)return alert('Please choose at least one meal type.');let data={title:$('title').value.trim(),meal:meals[0],meals,time:$('time').value.trim(),ingredients:$('ingredients').value.split('\n').map(x=>x.trim()).filter(Boolean),steps:$('steps').value.split('\n').map(x=>x.trim()).filter(Boolean),tags:$('tags').value.split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:safeSource($('source').value.trim()),photo:currentPhoto,photoX:currentPhotoX,photoY:currentPhotoY};let {error}=await db.rpc('save_recipe',{p_slug:cfg.librarySlug,p_edit_token:token,p_id:editing?.id||null,p_data:data});if(error){alert(error.message);return}$('editor').close();await load()};
