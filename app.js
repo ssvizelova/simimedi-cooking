@@ -35,7 +35,16 @@ function draw() {
     };
   });
 }
-function showRecipeDetail(data) {
+function showRecipeDetail(recipe) {
+  const {data} = recipe;
+  const editButton = $('editRecipe');
+  editButton.hidden = !canEdit;
+  if (canEdit) {
+    editButton.onclick = () => {
+      $('recipeDetail').close();
+      openRecipeEditor(recipe);
+    };
+  }
   $('recipeDetailTitle').textContent = data.title || 'Untitled recipe';
   $('recipeDetailMeta').textContent = recipeMeta(data);
   const photo = $('recipeDetailPhoto');
@@ -137,7 +146,26 @@ async function importShapedRecipe(url) {
 }
 
 $('importLink').onclick=async()=>{let url=$('sourceUrl').value.trim();if(!url)return alert('Please paste a link first.');$('importLink').disabled=true;$('importLink').textContent='Checking link…';try{let page=new URL(url);if(page.hostname==='studio.joinshaped.com'&&/^\/video\/[^/]+/.test(page.pathname)){openImported(await importShapedRecipe(page));return}if(/(^|\.)monsieur-cuisine\.com$/i.test(page.hostname)){let response=await fetch('https://r.jina.ai/'+url);if(response.ok){let parsed=parseMonsieurReader(await response.text(),url);if(parsed.ingredients.length){openImported(await translateImported(parsed));return}}}let {data,error}=await db.functions.invoke('extract-recipe',{body:{url}});if(error||data?.error)throw new Error(data?.error||error.message);if(data.kind==='text'){openImported(parseRecipeText(data.text,url));return}let recipe=data.recipe,rawSteps=recipe.recipeInstructions||[],steps=Array.isArray(rawSteps)?rawSteps.flatMap(x=>x?.itemListElement||[x]).map(x=>typeof x==='string'?x:(x?.text||'')).filter(Boolean):[rawSteps].filter(Boolean),category=Array.isArray(recipe.recipeCategory)?recipe.recipeCategory[0]:recipe.recipeCategory;openImported({title:recipe.name||'Imported recipe',meal:category||'Dinner',time:recipe.totalTime||recipe.cookTime||'',ingredients:recipe.recipeIngredient||[],steps,tags:Array.isArray(recipe.keywords)?recipe.keywords:String(recipe.keywords||'').split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:url})}catch(err){alert(`Could not extract this link: ${err.message}. Please use Text or Screenshot instead.`)}finally{$('importLink').disabled=false;$('importLink').textContent='Extract recipe'}};
-function openRecipe(id){let r=recipes.find(x=>x.id===id);if(!canEdit){if(r)showRecipeDetail(r.data);return}editing=r||null;showPhoto(r?.data.photo,r?.data.photoX,r?.data.photoY);$('title').value=r?.data.title||'';$('source').value=r?.data.source||'';setMealTypes(r?.data||{});$('time').value=formatTime(r?.data.time);$('ingredients').value=(r?.data.ingredients||[]).join('\n');$('steps').value=(r?.data.steps||[]).join('\n');$('tags').value=(r?.data.tags||[]).join(', ');$('remove').hidden=!r;$('editor').showModal();growTextareas()}
+function openRecipe(id) {
+  const recipe = recipes.find(row => row.id === id);
+  if (recipe) showRecipeDetail(recipe);
+}
+
+function openRecipeEditor(recipe) {
+  const {data} = recipe;
+  editing = recipe;
+  showPhoto(data.photo, data.photoX, data.photoY);
+  $('title').value = data.title || '';
+  $('source').value = data.source || '';
+  setMealTypes(data);
+  $('time').value = formatTime(data.time);
+  $('ingredients').value = (data.ingredients || []).join('\n');
+  $('steps').value = (data.steps || []).join('\n');
+  $('tags').value = (data.tags || []).join(', ');
+  $('remove').hidden = false;
+  $('editor').showModal();
+  growTextareas();
+}
 $('photoFile').onchange=e=>setRecipePhoto(e.target.files[0]);$('removePhoto').onclick=()=>showPhoto('');{let preview=$('photoPreview'),drag=null;preview.onpointerdown=e=>{if(!currentPhoto)return;drag={x:e.clientX,y:e.clientY,photoX:currentPhotoX,photoY:currentPhotoY};preview.setPointerCapture(e.pointerId);preview.focus();e.preventDefault()};preview.onpointermove=e=>{if(!drag)return;let box=preview.getBoundingClientRect();currentPhotoX=photoPosition(drag.photoX+(e.clientX-drag.x)/box.width*100);currentPhotoY=photoPosition(drag.photoY+(e.clientY-drag.y)/box.height*100);updatePhotoPosition()};preview.onpointerup=preview.onpointercancel=e=>{drag=null;if(preview.hasPointerCapture(e.pointerId))preview.releasePointerCapture(e.pointerId)};preview.onkeydown=e=>{let step=e.shiftKey?5:1;if(e.key==='ArrowLeft')currentPhotoX-=step;else if(e.key==='ArrowRight')currentPhotoX+=step;else if(e.key==='ArrowUp')currentPhotoY-=step;else if(e.key==='ArrowDown')currentPhotoY+=step;else return;e.preventDefault();updatePhotoPosition()}}
 document.querySelectorAll('#editor textarea').forEach(x=>x.addEventListener('input',growTextareas));
 $('save').onclick=async()=>{let meals=selectedMealTypes();if(!meals.length)return alert('Please choose at least one meal type.');let data={title:$('title').value.trim(),meal:meals[0],meals,time:$('time').value.trim(),ingredients:$('ingredients').value.split('\n').map(x=>x.trim()).filter(Boolean),steps:$('steps').value.split('\n').map(x=>x.trim()).filter(Boolean),tags:$('tags').value.split(',').map(x=>x.trim()).filter(Boolean),emoji:'🥘',source:safeSource($('source').value.trim()),photo:currentPhoto,photoX:currentPhotoX,photoY:currentPhotoY};let {error}=await db.rpc('save_recipe',{p_slug:cfg.librarySlug,p_edit_token:token,p_id:editing?.id||null,p_data:data});if(error){alert(error.message);return}$('editor').close();await load()};
